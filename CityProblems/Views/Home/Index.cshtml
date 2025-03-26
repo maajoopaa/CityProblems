@@ -1,0 +1,520 @@
+﻿@model List<CityProblems.DataAccess.Entities.IssueEntity>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<script src="https://api-maps.yandex.ru/2.1/?apikey=19d3f53c-3782-4fb7-a130-73b4c7a3f1a0&lang=ru_RU"></script>
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+	<style>
+		.map {
+			width: 100%;
+			height: 550px;
+			border-radius: 15px;
+			overflow: hidden;
+			box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+		}
+
+		[class*="copyrights-pane"] {
+			display: none !important;
+		}
+
+		[class*="ground-pane"] {
+			filter: grayscale(1);
+		}
+
+		.toast-notification {
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			z-index: 1100;
+			min-width: 300px;
+			animation: slideIn 0.5s forwards;
+		}
+
+		@@keyframes slideIn {
+			from {
+				transform: translateX(100%);
+				opacity: 0;
+			}
+
+			to {
+				transform: translateX(0);
+				opacity: 1;
+			}
+		}
+
+		.toast-error {
+			border-left: 5px solid #dc3545;
+		}
+
+		.toast-success{
+			border-left: 5px solid #28a745;
+		}
+
+		.is-invalid {
+			border-color: #dc3545 !important;
+		}
+
+			.is-invalid:focus {
+				box-shadow: 0 0 0 0.25rem rgba(220, 53, 69, 0.25) !important;
+			}
+	</style>
+</head>
+<body class="bg-light">
+
+	<div id="notificationContainer" class="toast-notification"></div>
+
+	<div class="container py-5">
+		<div class="row justify-content-center">
+			<div class="col-md-8">
+				<div id="map-test" class="map"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="offcanvas offcanvas-end" style="border-radius:15px" tabindex="-1" id="infoMenu">
+		<div class="offcanvas-header">
+			<h5 class="offcanvas-title">Информация о метке</h5>
+			<button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+		</div>
+		<div class="offcanvas-body">
+			<div class="mb-3">
+				<label for="category" class="form-label">Категория</label>
+				<select id="category" class="form-select"  required>
+					<option value="">Выберите категорию</option>
+				</select>
+			</div>
+
+			<div class="mb-3">
+				<label for="description" class="form-label">Описание</label>
+				<textarea id="description" class="form-control" rows="3" placeholder="Опишите проблему" required></textarea>
+			</div>
+
+			<div class="mb-3">
+				<label class="form-label">Широта</label>
+				<input type="text" id="coords-latitude" class="form-control" readonly>
+				<label class="form-label">Долгота</label>
+				<input type="text" id="coords-longitude" class="form-control" readonly>
+			</div>
+
+			<div class="mb-3">
+				<label for="photo" class="form-label">Фото проблемы</label>
+				<input type="file" id="photo" class="form-control">
+			</div>
+
+			<button class="btn btn-primary w-100 mb-2" onclick="savePlacemark()">Сохранить</button>
+			<button class="btn btn-danger w-100" onclick="removePlacemarkByCoords()">Удалить метку</button>
+		</div>
+	</div>
+
+	<div class="offcanvas offcanvas-end" style="border-radius:15px" tabindex="-1" id="viewMenu">
+		<div class="offcanvas-header">
+			<h5 class="offcanvas-title">Просмотр проблемы</h5>
+			<button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+		</div>
+		<div class="offcanvas-body">
+			<div class="mb-3">
+				<label class="form-label">Категория</label>
+				<input type="text" id="view-category" class="form-control" readonly>
+			</div>
+
+			<div class="mb-3">
+				<label class="form-label">Описание</label>
+				<textarea id="view-description" class="form-control" rows="3" readonly></textarea>
+			</div>
+
+			<div class="mb-3">
+				<label class="form-label">Широта</label>
+				<input type="text" id="view-latitude" class="form-control" readonly>
+				<label class="form-label">Долгота</label>
+				<input type="text" id="view-longitude" class="form-control" readonly>
+			</div>
+			<input type="hidden" id="id" />
+			<div class="mb-3">
+				<label class="form-label">Фото проблемы</label>
+				<div id="view-photo-container"></div>
+			</div>
+
+			<div class="mb-3">
+				<label for="view-status" class="form-label">Статус</label>
+				<select id="view-status" class="form-select">
+					<option value="0">Отправлена</option>
+					<option value="1">В работе</option>
+					<option value="2">Решена</option>
+				</select>
+			</div>
+
+			<button class="btn btn-primary w-100" onclick="updateStatus()">Обновить статус</button>
+		</div>
+	</div>
+
+	<script>
+		let center = [55.184279, 30.202813];
+		let map;
+		let menu = new bootstrap.Offcanvas(document.getElementById('infoMenu'));
+		let viewMenu = new bootstrap.Offcanvas(document.getElementById('viewMenu'));
+
+		function init() {
+			map = new ymaps.Map('map-test', {
+				center: center,
+				zoom: 15
+			});
+
+			map.controls.remove('geolocationControl');
+			map.controls.remove('searchControl');
+			map.controls.remove('trafficControl');
+			map.controls.remove('typeSelector');
+			map.controls.remove('fullscreenControl');
+			map.controls.remove('zoomControl');
+			map.controls.remove('rulerControl');
+			map.behaviors.disable(['scrollZoom']);
+
+			loadIssues(map);
+
+			map.events.add('click', function (e) {
+				let coords = e.get('coords');
+				createPlacemark(coords);
+			});
+		}
+
+		function removePlacemarkByCoords() {
+			
+			latitude = document.getElementById("coords-latitude").value;
+			longitude = document.getElementById("coords-longitude").value;
+
+			coords = [latitude, longitude];
+
+			const geoObjects = map.geoObjects;
+
+			
+			geoObjects.each(function (geoObject) {
+				if (geoObject.geometry && geoObject.geometry.getCoordinates) {
+					const placemarkCoords = geoObject.geometry.getCoordinates();
+
+					
+					if (Math.abs(placemarkCoords[0] - coords[0]) < 0.000001 &&
+						Math.abs(placemarkCoords[1] - coords[1]) < 0.000001) {
+						
+						menu.hide();
+
+						geoObjects.remove(geoObject);
+
+						return; 
+					}
+				}
+			});
+		}
+
+		function createPlacemark(coords) {
+			placemark = new ymaps.Placemark(coords, {
+			}, {
+				iconLayout: 'default#image',
+				iconImageHref: 'https://cdn-icons-png.flaticon.com/128/9131/9131546.png',
+				iconImageSize: [40, 40],
+				iconImageOffset: [-19, -44],
+				draggable: true
+			});
+
+			placemark.events.add('dragend', function () {
+				let newCoords = placemark.geometry.getCoordinates();
+				updateMenu(newCoords);
+			});
+
+			placemark.events.add('click', function () {
+				let newCoords = placemark.geometry.getCoordinates();
+				updateMenu(newCoords);
+			});
+
+			map.geoObjects.add(placemark);
+
+			updateMenu(coords);
+		}
+
+		//notify
+		async function loadCategories() {
+			try {
+				let response = await fetch("/Home/GetCategories"); 
+				let categories = await response.json();
+
+				let select = document.getElementById("category");
+				select.innerHTML = '<option value="">Выберите категорию...</option>';
+				categories.forEach(cat => {
+					let option = document.createElement("option");
+					option.value = cat.id; 
+					option.textContent = cat.title; 
+					select.appendChild(option);
+				});
+			} catch (error) {
+				showNotification('error', 'Ошибка', 'Ошибка во время загрузки категорий');
+			}
+		}
+
+		//notify
+		function loadIssues(map) {
+			try {
+				const issues = @Html.Raw(Json.Serialize(Model));
+        
+				if (!issues || issues.length === 0) {
+					return;
+				}
+
+				map.geoObjects.removeAll();
+
+				issues.forEach(issue => {
+					const placemark = new ymaps.Placemark(
+						[issue.latitude, issue.longitude],
+						{
+							issueId: issue.id
+						},
+						{
+							iconLayout: 'default#image',
+							iconImageHref: getIconByCategory(issue.category?.title),
+							iconImageSize: [40, 40],
+							iconImageOffset: [-20, -40],
+						}
+					);
+
+					placemark.events.add('click', function (e) {
+						const target = e.get('target');
+						const coords = target.geometry.getCoordinates();
+
+						getIssue(target.properties.get('issueId'));
+					});
+
+					map.geoObjects.add(placemark);
+				});
+
+			} catch (error) {
+				showNotification('error', 'Ошибка', 'Ошибка во время загрузки точек');
+			}
+		}
+
+		function getIconByCategory(category) {
+			const icons = {
+				"Дорога": 'https://cdn-icons-png.flaticon.com/128/2554/2554922.png',
+				"Парк": 'https://cdn-icons-png.flaticon.com/128/490/490091.png',
+				"Освещение": 'https://cdn-icons-png.flaticon.com/128/5764/5764547.png',
+				"Мусор": 'https://cdn-icons-png.flaticon.com/128/3820/3820785.png'
+			};
+			return icons[category] || 'https://cdn-icons-png.flaticon.com/128/9131/9131546.png';
+		}
+
+		//notify
+		async function getIssue(id){
+			try{
+				let response = await fetch(`/Issue/GetById?id=${id}`);
+
+
+				//notify
+				if (response.status == 403) {
+					showNotification('error', 'Ошибка', 'У вас недостаточно прав для этого действия');
+					return;
+				}
+
+				let issue = await response.json();
+
+				document.getElementById("view-category").value = issue.category?.title || 'Не указана';
+				document.getElementById("view-description").value = issue.description || '';
+				document.getElementById("id").value = id;
+				document.getElementById("view-latitude").value = issue.latitude;
+				document.getElementById("view-longitude").value = issue.longitude;
+				document.getElementById("view-status").value = parseInt(issue.executionState) || 0;
+
+				const photoContainer = document.getElementById("view-photo-container");
+				if (issue.image) { 
+					
+					const byteCharacters = atob(issue.image);
+					const byteNumbers = new Array(byteCharacters.length);
+					for (let i = 0; i < byteCharacters.length; i++) {
+						byteNumbers[i] = byteCharacters.charCodeAt(i);
+					}
+					const byteArray = new Uint8Array(byteNumbers);
+					const blob = new Blob([byteArray], {type: 'image/jpeg'});
+            
+					const imageUrl = URL.createObjectURL(blob);
+					photoContainer.innerHTML = `<img src="${imageUrl}" class="img-thumbnail" style="max-width: 100%">`;
+				} else if (issue.photoUrl) {
+					photoContainer.innerHTML = `<img src="${issue.photoUrl}" class="img-thumbnail" style="max-width: 100%">`;
+				} else {
+					photoContainer.innerHTML = '<p>Фото отсутствует</p>';
+				}
+
+				viewMenu.show();
+			}catch(error){
+				showNotification('error', 'Ошибка', error || 'Во время загрузки даннных произошла ошибка');
+			}
+		}
+
+		//notify
+		async function updateStatus(){
+			const status = document.getElementById("view-status").value;
+        
+			try {
+				let response = await fetch("/Issue/UpdateStatus", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						id: document.getElementById("id").value,
+						status: status
+					})
+				});
+
+				if (response.ok) {
+					viewMenu.hide();
+					showNotification('success', 'Успех', 'Метка успешно сохранена');
+					setTimeout(() => {
+						window.location.reload();
+					}, 1000);
+				} else if (response.status == 403) {
+					showNotification('error', 'Ошибка', 'Для этого действия нужна авторизация');
+					setTimeout(() => {
+						window.location.href = "/Account/SignIn";
+					}, 1000);
+					return;
+				} else {
+					throw new Error("Ошибка при обновлении статуса");
+				}
+			} catch(error) {
+				showNotification('error', 'Ошибка', error || 'Ошибка при обновлении статуса');
+				console.error(error);
+			}
+		}
+
+		function updateMenu(coords) {
+			document.getElementById("coords-latitude").value = `${coords[0].toFixed(6)}`;
+			document.getElementById("coords-longitude").value = `${coords[1].toFixed(6)}`;
+			menu.show();
+		}
+
+		//notify
+		async function savePlacemark() {
+			try{
+
+				const category = document.getElementById("category");
+				const description = document.getElementById("description");
+				const photoInput = document.getElementById("photo");
+
+				
+				if (!category.value) {
+					showNotification('error', 'Ошибка', 'Выберите категорию');
+					category.focus();
+					return;
+				}
+
+				if (!description.value.trim()) {
+					showNotification('error', 'Ошибка', 'Введите описание проблемы');
+					description.focus();
+					return;
+				}
+
+				if (!photoInput.files || photoInput.files.length === 0) {
+					showNotification('error', 'Ошибка', 'Добавьте фото проблемы');
+					photoInput.focus();
+					return;
+				}
+
+				
+				const file = photoInput.files[0];
+				const validImageTypes = ['image/jpeg', 'image/png', 'image/gif'];
+				if (!validImageTypes.includes(file.type)) {
+					showNotification('error', 'Ошибка', 'Загрузите изображение в формате JPG, PNG или GIF');
+					return;
+				}
+
+				let data = {
+					category: document.getElementById("category").value,
+					description: document.getElementById("description").value,
+					latitude: document.getElementById("coords-latitude").value,
+					longitude: document.getElementById("coords-longitude").value,
+					photo: await getBase64(document.getElementById("photo").files[0])
+				};
+
+				let response = await fetch("/Issue/Save", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(data)
+				});
+
+				if (response.status == 403) {
+					window.location.href = "/Account/SignIn";
+					return;
+				}
+
+				if (response.ok) {
+					menu.hide();
+					showNotification('success', 'Успех', 'Метка успешно сохранена');
+					setTimeout(() => {
+						window.location.reload();
+					}, 1000);
+				}
+				else {
+					const error = response.text();
+					showNotification('error', 'Ошибка', error || 'Не удалось сохранить метку');
+				}
+			}catch{
+				showNotification('error', 'Ошибка', 'Произошла ошибка при сохранении');
+				console.error(error);
+			}
+		}
+
+		function getBase64(file) {
+			return new Promise((resolve) => {
+				if (!file) return resolve(null);
+				let reader = new FileReader();
+				reader.onload = () => resolve(reader.result.split(',')[1]);
+				reader.readAsDataURL(file);
+			});
+		}
+
+
+		//notification
+		function showNotification(type, title, message) {
+			const container = document.getElementById('notificationContainer');
+
+			
+			const toastEl = document.createElement('div');
+			toastEl.className = `toast show toast-${type}`;
+			toastEl.setAttribute('role', 'alert');
+			toastEl.setAttribute('aria-live', 'assertive');
+			toastEl.setAttribute('aria-atomic', 'true');
+
+
+			const iconClass = type === 'success' ? 'text-success' : 'text-danger';
+			const bgClass = type === 'success' ? 'bg-success text-white' : 'bg-danger text-white';
+
+			toastEl.innerHTML = `
+						<div class="toast-header ${bgClass}">
+							<strong class="me-auto">${title}</strong>
+							<button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Закрыть"></button>
+						</div>
+						<div class="toast-body bg-light">
+							${message}
+						</div>
+					`;
+
+			
+			container.appendChild(toastEl);
+
+			
+			const toast = new bootstrap.Toast(toastEl);
+			toast.show();
+
+			
+			toastEl.addEventListener('hidden.bs.toast', function () {
+				toastEl.remove();
+			});
+
+			
+			setTimeout(() => {
+				toast.hide();
+			}, 5000);
+		}
+
+		ymaps.ready(init);
+		loadCategories();
+	</script>
+
+</body>
+</html>
